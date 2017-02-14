@@ -10,12 +10,14 @@ import threading, Queue
 reload(sys)
 sys.setdefaultencoding('utf-8')
 
+# 数据库信息
 sql_user = ""
 sql_pass = ""
 sql_db = ""
 
 log_pass = "/home/log/zimuzu_mirror_log/"
 
+# API授权信息
 cid = ""
 key = ""
 
@@ -25,20 +27,21 @@ fetch_res_list_base_url = "http://api_server/res/fetchlist?client=1&limit=20&sor
 get_res_info_base_url = "http://api_server/res/getinfo?client=1"
 res_item_list_base_url = "http://api_server/res/itemlist?client=1&file=1"
 
+# 初次同步需要大量info线程，增量同步不需要太多info线程
 fetch_sub_page_thread_count = 3
-fetch_sub_info_thread_count = 10
+fetch_sub_info_thread_count = 2
 fetch_res_page_thread_count = 3
-fetch_res_info_thread_count = 10
+fetch_res_info_thread_count = 2
 
-
+# 日志打印
 def log(msg, num = 0, thread = ""):
-	if num == 0:
+	if num == 0:	# 过滤普通日志消息，只打印保留异常消息
 		return None
-	try:
+	try:	# 如果是文本消息，加时间戳和线程名后打印
 		print time.asctime() + " thread:" + (threading.current_thread().getName() if thread == "" else " thread:" + thread) + " msg:" + msg
-	except TypeError, e:
+	except TypeError, e:	# 非文本信息直接打印
 		print msg
-	if num != 0:
+	if num != 0:	# 将异常信息写入日志文件保存
 		f = file((log_pass + "zmz_mirror_log_" + time.strftime("%Y-%m-%d",time.localtime()) + ".log"), 'a')
 		lock = threading.Lock()
 		lock.acquire()
@@ -51,7 +54,7 @@ def log(msg, num = 0, thread = ""):
 		f.close()
 		lock.release()
 
-
+# API授权计算方法
 def access_key():
 	timestamp = str(int(time.time()))
 	md5 = hashlib.md5()
@@ -59,17 +62,21 @@ def access_key():
 	accesskey = md5.hexdigest()
 	return "&cid=" + cid + "&timestamp=" + timestamp + "&accesskey=" + accesskey
 
-
+# 网络访问方法
+fetch_times = 0
 def fetch(url):
+	global fetch_times
+
 	url = url + access_key()
 	req = urllib2.Request(url)
 	fails = 0
 	while True:
 		try:
-			if fails >= 5:
+			if fails >= 5:	# 允许超时5次，大于5次判断为出错
 				log("Error in fetch().", num = 1)
 				log(url, num = 1)
 				return None
+			fetch_times = fetch_times + 1
 			res_data = urllib2.urlopen(req, timeout = 5)
 			res = res_data.read()
 		except KeyboardInterrupt, e:
@@ -98,7 +105,7 @@ def fetch(url):
 		else :
 			return json_data["data"]
 
-
+# 数据库插入文本检测方法，对插入数据库的文本字段进行处理
 def sql_check(str):
 	if str == None:
 		return ""
@@ -107,7 +114,7 @@ def sql_check(str):
 	new_str = str.replace("'", "\\'")
 	return new_str
 
-
+# 字幕列表页获取方法
 def fetch_subtitle_page():
 	global main_tag
 	global fetch_sub_list_tag
@@ -155,7 +162,7 @@ def fetch_subtitle_page():
 			sub_id_que.put(sub_id)
 			lock.release()
 
-
+# 字幕信息获取方法
 def fetch_subtitle_info():
 	global main_tag
 	global fetch_sub_list_tag
@@ -204,7 +211,7 @@ def fetch_subtitle_info():
 		cur.close()
 		conn.close()
 
-
+# 字幕获取方法
 fetch_sub_list_tag = 0
 fetch_sub_page_tag = 0
 sub_page = 1
@@ -218,20 +225,20 @@ def fetch_subtitle_list():
 	global sub_page
 	global sub_page_count
 	global sub_id_que
-
-	if len(sys.argv) > 1:
-		sub_page = int(sys.argv[1])
-	else :
-		sub_page = 1
-	sub_id_que = Queue.Queue(0)
 	fetch_sub_list_tag = 0
 	fetch_sub_page_tag = 0
+	sub_id_que = Queue.Queue(0)
 
 	list_data = fetch(fetch_sub_list_base_url + "&page=1")
 	if list_data == None:
 		log("Error in fetch_subtitle_list().", num = 1)
 		return
 	sub_page_count = int(math.ceil(float(int(list_data["count"])) / 20.0))
+	if len(sys.argv) == 3:
+		sub_page = int(sys.argv[1])
+		sub_page_count = (int(sys.argv[2]) if int(sys.argv[2]) <= sub_page_count else sub_page_count)
+	else :
+		sub_page = 1
 
 	fetch_sub_page_threads = []
 	for i in xrange(1, fetch_sub_page_thread_count + 1):
@@ -257,7 +264,7 @@ def fetch_subtitle_list():
 		time.sleep(1)
 	main_tag = main_tag - 1
 
-
+# 资源列表页获取方法
 def fetch_resource_page():
 	global main_tag
 	global fetch_res_list_tag
@@ -302,13 +309,13 @@ def fetch_resource_page():
 				if res_update_time <= res_indb_dateline:
 					continue
 			
-			res_tuple = (res_id, res_update_time, res_lang)
+			res_tuple = (res_id, res_update_time, res_lang)	# 资源详情页不包含更新时间和语言信息，所以用元组将其传入资源信息获取方法
 			lock = threading.Lock()
 			lock.acquire()
 			res_id_que.put(res_tuple)
 			lock.release()
 
-
+# 资源信息获取方法
 def fetch_resource_info():
 	global main_tag
 	global fetch_res_list_tag
@@ -414,7 +421,7 @@ def fetch_resource_info():
 			cur.close()
 			conn.close()
 
-
+# 资源获取方法
 fetch_res_list_tag = 0
 fetch_res_page_tag = 0
 res_page = 0
@@ -428,20 +435,20 @@ def fetch_resource_list():
 	global res_page
 	global res_page_count
 	global res_id_que
-
-	if len(sys.argv) > 1:
-		res_page = int(sys.argv[1])
-	else :
-		res_page = 1
-	res_id_que = Queue.Queue(0)
 	fetch_res_list_tag = 0
 	fetch_res_page_tag = 0
+	res_id_que = Queue.Queue(0)
 
 	list_data = fetch(fetch_res_list_base_url + "&page=1")
 	if list_data == None:
 		log("Error in fetch_resource_list().", num = 1)
 		return
 	res_page_count = int(math.ceil(float(int(list_data["count"])) / 20.0))
+	if len(sys.argv) == 3:
+		res_page = int(sys.argv[1])
+		res_page_count = (int(sys.argv[2]) if int(sys.argv[2]) <= res_page_count else res_page_count)
+	else :
+		res_page = 1
 
 	fetch_res_page_threads = []
 	for i in xrange(1, fetch_res_page_thread_count + 1):
@@ -472,9 +479,10 @@ main_tag = 0
 
 if __name__ == "__main__":
 	print "You can press Ctrl+c to close!"
-	log("Start", num = 1)
 	try:
+		start_time = int(time.time())
 		main_tag = 0
+		
 		main_threads = []
 		t1 = threading.Thread(target = fetch_subtitle_list)
 		main_threads.append(t1)
@@ -488,7 +496,9 @@ if __name__ == "__main__":
 		
 		while main_tag > 0 :
 			time.sleep(1)
-		log("End", num = 1)
+		end_time = int(time.time())
+
+		log("\nStart time: " + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time)) + " \nEnd time: " + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end_time)) + (" \nElapsed time:%ds" % (end_time - start_time)) + (" \nFetch times:%d" % fetch_times), num = 1)
 
 	except KeyboardInterrupt:
 		print "User press Ctrl+c, exit!"
